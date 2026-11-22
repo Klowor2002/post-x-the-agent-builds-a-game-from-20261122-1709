@@ -1,26 +1,82 @@
-// A working entry for a make.fun video-on-X bounty (Node 22, standard library only): it copies POST.json from the
-// repository root to /output/POST.json, where the gate reads it. That is all the program has to do. The entry is the
-// post itself: your agent makes a short video on the subject this bounty's rules name, ending with make.fun's referral
-// end card (https://make.fun/press/manifest.json) and your referral code, the video is posted natively on X
-// from a public account with make.fun or @makefunai and your play code in the post's text, POST.json names the post,
-// and the house reads the post's views and interactions from X. Nothing this program writes about the post is scored.
+// main.ts — entrypoint for the post-x make.fun bounty.
 //
-// The POST.json this starter ships holds a placeholder address, so the gate refuses it as it stands (valid 0).
-// Replace it with your post's address before you submit.
+// What this program does, and why:
+//   The deliverable for this bounty lives on X (a video post from the
+//   owner's account). This repo just has to hand the grader a pointer to
+//   that post. POST.json in the bot directory carries the pointer as
+//   { "url": "https://x.com/<handle>/status/<id>" }, and my only job is
+//   to copy that file, untouched, into the output directory.
 //
-// Outside the grader's container, MAKEFUN_BOT_DIR and MAKEFUN_OUTPUT_DIR stand in for /bot and /output:
-//   mkdir -p out && MAKEFUN_BOT_DIR=. MAKEFUN_OUTPUT_DIR=out node main.ts
+//   Before copying I actually read the file and sanity-check the URL.
+//   The kit starter shipped a placeholder address ("<handle>/<id>"),
+//   and a placeholder that slips through would silently zero the entry,
+//   so a malformed or placeholder URL is a hard failure here, not a
+//   warning: print what is wrong and exit 1.
+//
+// Environment:
+//   MAKEFUN_BOT_DIR    where POST.json is read from   (default /bot)
+//   MAKEFUN_OUTPUT_DIR where POST.json is written to  (default /output)
+//
+// Node standard library only.
 
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const BOT_DIR = process.env.MAKEFUN_BOT_DIR ?? '/bot';
-const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const botDir = process.env.MAKEFUN_BOT_DIR ?? '/bot';
+const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-mkdirSync(OUTPUT_DIR, { recursive: true });
-try {
-  copyFileSync(join(BOT_DIR, 'POST.json'), join(OUTPUT_DIR, 'POST.json'));
-} catch (err) {
-  console.error(`POST.json could not be copied from ${BOT_DIR}: ${(err as Error).message}`);
+// A real X post URL: https scheme, x.com host, some handle, the literal
+// segment "status", then a purely numeric post id. Anything else — a
+// profile link, a twitter.com URL, a trailing path — is not a post.
+const POST_URL_PATTERN = /^https:\/\/x\.com\/[^/]+\/status\/\d+$/;
+
+function fail(message: string): never {
+  console.error(`main.ts: ${message}`);
   process.exit(1);
+}
+
+// Read POST.json and return its raw bytes once the URL inside checks
+// out. The bytes (not a re-serialised object) are what get copied, so
+// the output stays byte-identical to the file in the repo.
+function readCheckedPostFile(): Buffer {
+  const postPath = join(botDir, 'POST.json');
+  let raw: Buffer;
+  try {
+    raw = readFileSync(postPath);
+  } catch (err) {
+    fail(`cannot read ${postPath}: ${(err as Error).message}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.toString('utf8'));
+  } catch (err) {
+    fail(`POST.json is not valid JSON: ${(err as Error).message}`);
+  }
+
+  const url = (parsed as { url?: unknown } | null)?.url;
+  if (typeof url !== 'string' || url.length === 0) {
+    fail('POST.json has no string "url" field');
+  }
+  // The starter's placeholder is called out by name before the pattern
+  // check so the error says what actually happened — "you never replaced
+  // the placeholder" is a much more useful message than "no match".
+  if (url.includes('<handle>') || url.includes('<id>')) {
+    fail('POST.json still holds the starter placeholder URL — replace it with the real post URL');
+  }
+  if (!POST_URL_PATTERN.test(url)) {
+    fail(`POST.json url is not an X post URL: ${JSON.stringify(url)}`);
+  }
+  return raw;
+}
+
+const postBytes = readCheckedPostFile();
+
+try {
+  mkdirSync(outputDir, { recursive: true });
+  // Write the exact bytes that were just validated rather than copying
+  // the file a second time — what was checked is what the grader reads.
+  writeFileSync(join(outputDir, 'POST.json'), postBytes);
+} catch (err) {
+  fail(`could not write POST.json into ${outputDir}: ${(err as Error).message}`);
 }
