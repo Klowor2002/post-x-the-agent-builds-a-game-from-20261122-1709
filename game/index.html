@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<link rel="icon" href="data:,">
+<title>Star Cat — a tiny game built from one prompt</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #070414; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1080" height="1920"></canvas>
+<script>
+'use strict';
+// Star Cat: catch the falling stars, dodge the falling fireballs.
+// Move with the mouse, touch, or the arrow keys. One self-contained file.
+
+const W = 1080, H = 1920;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+function fitCanvas() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+// ---------------------------------------------------------------- state
+const DEMO = new URLSearchParams(location.search).has('demo');
+const state = {
+  running: false, over: false, t: 0, last: 0,
+  score: 0, lives: 3, caught: 0, hits: 0,
+  shake: 0, flash: 0, spawnStar: 0, spawnFire: 0, spawnFish: 0,
+};
+window.__gameState = state;
+
+const cat = { x: W / 2, y: H - 330, vx: 0, targetX: W / 2, face: 1, tailPhase: 0 };
+const items = [];      // falling things: {kind, x, y, vy, rot, vr, r}
+const particles = [];  // sparkles and embers
+const floaters = [];   // "+10" texts
+const bgStars = Array.from({ length: 110 }, () => ({
+  x: Math.random() * W, y: Math.random() * H, r: 1 + Math.random() * 2.4,
+  p: Math.random() * Math.PI * 2,
+}));
+const clouds = Array.from({ length: 5 }, (_, i) => ({
+  x: Math.random() * W, y: 120 + i * 210, s: 0.7 + Math.random() * 0.9, v: 12 + Math.random() * 16,
+}));
+
+// ---------------------------------------------------------------- input
+let pointerX = null;
+function toGameX(clientX) {
+  const r = canvas.getBoundingClientRect();
+  return (clientX - r.left) / r.width * W;
+}
+canvas.addEventListener('pointermove', e => { pointerX = toGameX(e.clientX); });
+canvas.addEventListener('pointerdown', e => { pointerX = toGameX(e.clientX); startIfNeeded(); });
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key] = true; startIfNeeded(); });
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+function startIfNeeded() {
+  if (!state.running && !state.over) { state.running = true; state.last = performance.now(); }
+  else if (state.over) { resetGame(); }
+}
+function resetGame() {
+  state.score = 0; state.lives = 3; state.caught = 0; state.hits = 0;
+  state.t = 0; state.over = false; state.running = true;
+  items.length = 0; particles.length = 0; floaters.length = 0;
+  cat.x = W / 2; cat.targetX = W / 2;
+  state.last = performance.now();
+}
+
+// ---------------------------------------------------------------- spawning
+function spawn(kind) {
+  const margin = 70;
+  const x = margin + Math.random() * (W - margin * 2);
+  const ramp = Math.min(1, state.t / 75);               // difficulty over ~75s
+  const base = kind === 'fire' ? 560 : 470;
+  items.push({
+    kind, x, y: -60, r: kind === 'fish' ? 44 : 40,
+    vy: base + Math.random() * 190 + ramp * 330,
+    rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 2.4,
+  });
+}
+
+// ---------------------------------------------------------------- drawing helpers
+function star2D(x, y, r, rot, color) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rad = i % 2 === 0 ? r : r * 0.46;
+    const a = i * Math.PI / 5 - Math.PI / 2;
+    ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rad, Math.sin(a) * rad);
+  }
+  ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+function heart(x, y, s, color) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.beginPath();
+  ctx.moveTo(0, 26);
+  ctx.bezierCurveTo(-44, -6, -26, -40, 0, -18);
+  ctx.bezierCurveTo(26, -40, 44, -6, 0, 26);
+  ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0b0630'); g.addColorStop(0.55, '#1d0f4a'); g.addColorStop(1, '#341257');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  for (const s of bgStars) {
+    ctx.globalAlpha = 0.35 + 0.6 * Math.abs(Math.sin(state.t * 1.7 + s.p));
+    ctx.fillStyle = '#dfe8ff'; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // moon
+  ctx.fillStyle = '#f7ead0'; ctx.beginPath(); ctx.arc(W - 190, 215, 96, 0, 7); ctx.fill();
+  ctx.fillStyle = '#e8d5ae'; ctx.beginPath(); ctx.arc(W - 225, 185, 17, 0, 7); ctx.arc(W - 155, 250, 12, 0, 7); ctx.fill();
+  // clouds
+  ctx.fillStyle = 'rgba(38,26,84,0.85)';
+  for (const c of clouds) {
+    ctx.beginPath();
+    ctx.ellipse(c.x, c.y, 150 * c.s, 42 * c.s, 0, 0, 7);
+    ctx.ellipse(c.x - 80 * c.s, c.y + 12 * c.s, 95 * c.s, 32 * c.s, 0, 0, 7);
+    ctx.ellipse(c.x + 85 * c.s, c.y + 10 * c.s, 105 * c.s, 34 * c.s, 0, 0, 7);
+    ctx.fill();
+  }
+  // hills
+  ctx.fillStyle = '#120826';
+  ctx.beginPath(); ctx.moveTo(0, H);
+  ctx.quadraticCurveTo(240, H - 190, 560, H - 90);
+  ctx.quadraticCurveTo(830, H - 10, W, H - 130);
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+}
+function drawCat() {
+  const { x, y } = cat;
+  ctx.save(); ctx.translate(x, y);
+  // tail
+  ctx.strokeStyle = '#8f7bd8'; ctx.lineWidth = 26; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-58, 66);
+  ctx.quadraticCurveTo(-128, 58, -118 + Math.sin(cat.tailPhase) * 22, -6);
+  ctx.stroke();
+  // body
+  ctx.fillStyle = '#a58fe0';
+  ctx.beginPath(); ctx.ellipse(0, 52, 86, 76, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#c9bcf2';
+  ctx.beginPath(); ctx.ellipse(0, 66, 48, 44, 0, 0, 7); ctx.fill();
+  // feet
+  ctx.fillStyle = '#8f7bd8';
+  ctx.beginPath(); ctx.ellipse(-46, 122, 30, 15, 0, 0, 7); ctx.ellipse(46, 122, 30, 15, 0, 0, 7); ctx.fill();
+  // head
+  ctx.fillStyle = '#b3a0e8';
+  ctx.beginPath(); ctx.arc(0, -52, 76, 0, 7); ctx.fill();
+  // ears
+  ctx.fillStyle = '#a58fe0';
+  ctx.beginPath(); ctx.moveTo(-64, -96); ctx.lineTo(-84, -168); ctx.lineTo(-18, -122); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(64, -96); ctx.lineTo(84, -168); ctx.lineTo(18, -122); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f2a7c3';
+  ctx.beginPath(); ctx.moveTo(-66, -106); ctx.lineTo(-76, -148); ctx.lineTo(-32, -118); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(66, -106); ctx.lineTo(76, -148); ctx.lineTo(32, -118); ctx.closePath(); ctx.fill();
+  // wizard hat
+  ctx.fillStyle = '#2c1a6e';
+  ctx.beginPath(); ctx.moveTo(-16, -128); ctx.quadraticCurveTo(6, -238, 58, -268);
+  ctx.quadraticCurveTo(30, -196, 44, -140); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#241458';
+  ctx.beginPath(); ctx.ellipse(2, -130, 92, 20, -0.06, 0, 7); ctx.fill();
+  star2D(16, -196, 15, 0.4, '#ffd94d'); star2D(34, -158, 10, 0.9, '#ffd94d');
+  // eyes look toward the movement
+  const look = Math.max(-1, Math.min(1, cat.vx / 900)) * 9;
+  ctx.fillStyle = '#1c1030';
+  ctx.beginPath(); ctx.ellipse(-28 + look, -52, 9, 14, 0, 0, 7); ctx.ellipse(28 + look, -52, 9, 14, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(-25 + look, -58, 3.4, 0, 7); ctx.arc(31 + look, -58, 3.4, 0, 7); ctx.fill();
+  // nose + mouth + whiskers
+  ctx.fillStyle = '#f28bb0'; ctx.beginPath(); ctx.moveTo(-8, -30); ctx.lineTo(8, -30); ctx.lineTo(0, -21); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#5d4a9e'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(-8, -18, 9, 0.3, 1.7); ctx.arc(9, -18, 9, 1.4, 2.8); ctx.stroke();
+  ctx.strokeStyle = 'rgba(230,224,255,0.75)'; ctx.lineWidth = 3;
+  for (const s of [-1, 1]) for (let i = 0; i < 3; i++) {
+    ctx.beginPath(); ctx.moveTo(s * 44, -34 + i * 9);
+    ctx.lineTo(s * 108, -44 + i * 15); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawItem(it) {
+  ctx.save(); ctx.translate(it.x, it.y);
+  if (it.kind === 'star') {
+    ctx.shadowColor = '#ffd94d'; ctx.shadowBlur = 34;
+    star2D(0, 0, 42, it.rot, '#ffd94d');
+    ctx.shadowBlur = 0; star2D(0, 0, 20, it.rot, '#ffec9e');
+  } else if (it.kind === 'fire') {
+    ctx.shadowColor = '#ff6a00'; ctx.shadowBlur = 36;
+    const flick = 1 + Math.sin(state.t * 31 + it.x) * 0.09;
+    ctx.scale(flick, flick);
+    ctx.fillStyle = '#ff7b1c';
+    ctx.beginPath();
+    ctx.moveTo(0, -58);
+    ctx.quadraticCurveTo(40, -6, 30, 26);
+    ctx.quadraticCurveTo(22, 52, 0, 54);
+    ctx.quadraticCurveTo(-24, 50, -30, 24);
+    ctx.quadraticCurveTo(-38, -8, 0, -58);
+    ctx.fill();
+    ctx.fillStyle = '#ffc63d';
+    ctx.beginPath(); ctx.ellipse(0, 18, 17, 24, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff3b0';
+    ctx.beginPath(); ctx.ellipse(0, 28, 8, 12, 0, 0, 7); ctx.fill();
+  } else { // fish bonus
+    ctx.shadowColor = '#37e0c8'; ctx.shadowBlur = 26;
+    ctx.rotate(Math.sin(it.rot) * 0.25);
+    ctx.fillStyle = '#2fd4bd';
+    ctx.beginPath(); ctx.ellipse(0, 0, 46, 27, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(38, 0); ctx.lineTo(72, -24); ctx.lineTo(72, 24); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#0d4f45'; ctx.beginPath(); ctx.arc(-24, -6, 6, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#0d4f45'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(6, 2, 16, -1.1, 1.1); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawHUD() {
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 64px system-ui, sans-serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('Score ' + state.score, 44, 36);
+  for (let i = 0; i < 3; i++) {
+    heart(W - 64 - i * 92, 66, 0.92, i < state.lives ? '#ff5d7e' : 'rgba(255,255,255,0.22)');
+  }
+  if (!state.running && !state.over && !DEMO) {
+    ctx.textAlign = 'center';
+    ctx.font = '800 92px system-ui, sans-serif';
+    ctx.fillText('STAR CAT', W / 2, H / 2 - 210);
+    ctx.font = '500 44px system-ui, sans-serif';
+    ctx.fillStyle = '#cfc4ff';
+    ctx.fillText('Catch the stars. Dodge the fireballs.', W / 2, H / 2 - 96);
+    ctx.fillText('Move with mouse, touch or arrow keys.', W / 2, H / 2 - 36);
+    ctx.fillStyle = '#ffd94d';
+    ctx.font = '700 48px system-ui, sans-serif';
+    ctx.fillText('Click or press a key to play', W / 2, H / 2 + 60);
+  }
+  if (state.over) {
+    ctx.fillStyle = 'rgba(5,2,18,0.62)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center';
+    ctx.font = '800 96px system-ui, sans-serif';
+    ctx.fillText('GAME OVER', W / 2, H / 2 - 170);
+    ctx.font = '600 56px system-ui, sans-serif';
+    ctx.fillText('Score ' + state.score + '  ·  Stars ' + state.caught, W / 2, H / 2 - 52);
+    ctx.fillStyle = '#ffd94d'; ctx.font = '700 46px system-ui, sans-serif';
+    ctx.fillText('Click to play again', W / 2, H / 2 + 44);
+  }
+}
+
+// ---------------------------------------------------------------- demo autopilot
+function demoDrive(dt) {
+  // Score candidate positions: run from where fireballs will land, drift to the best star.
+  let bestStar = null, bestStarScore = -Infinity;
+  for (const it of items) {
+    if (it.kind === 'fire') continue;
+    const dy = cat.y - it.y;
+    if (dy < -80) continue;
+    const s = (it.kind === 'fish' ? 300 : 130) - Math.abs(it.x - cat.x) * 0.4 - Math.max(0, dy) * 0.1;
+    if (s > bestStarScore) { bestStarScore = s; bestStar = it; }
+  }
+  const goalX = bestStar ? bestStar.x : W / 2 + Math.sin(state.t * 0.7) * 240;
+  let bestX = cat.x, bestVal = -Infinity;
+  for (const off of [-430, -300, -180, -90, 0, 90, 180, 300, 430]) {
+    const cx = Math.max(96, Math.min(W - 96, cat.x + off));
+    let val = -Math.abs(cx - goalX) * 0.45 - Math.abs(off) * 0.05;
+    for (const it of items) {
+      if (it.kind !== 'fire') continue;
+      const eta = (cat.y - 30 - it.y) / Math.max(1, it.vy);   // seconds until it reaches the cat's row
+      if (eta < -0.1 || eta > 1.25) continue;
+      const gap = Math.abs(cx - it.x);
+      if (gap < 215) val -= (215 - gap) * (2.6 - eta * 1.6);  // closer + sooner = much worse
+    }
+    if (val > bestVal) { bestVal = val; bestX = cx; }
+  }
+  cat.targetX = bestX;
+}
+
+// ---------------------------------------------------------------- update
+function update(dt) {
+  state.t += dt;
+  cat.tailPhase += dt * 6;
+  for (const c of clouds) { c.x += c.v * dt; if (c.x - 260 > W) c.x = -260; }
+
+  if (DEMO) demoDrive(dt);
+  else if (pointerX !== null) cat.targetX = pointerX;
+  if (keys['ArrowLeft']) cat.targetX = cat.x - 660 * dt * 3.2;
+  if (keys['ArrowRight']) cat.targetX = cat.x + 660 * dt * 3.2;
+
+  const prevX = cat.x;
+  const maxStep = 1480 * dt;
+  cat.x += Math.max(-maxStep, Math.min(maxStep, cat.targetX - cat.x));
+  cat.x = Math.max(96, Math.min(W - 96, cat.x));
+  cat.vx = dt > 0 ? (cat.x - prevX) / dt : 0;
+
+  state.spawnStar -= dt; state.spawnFire -= dt; state.spawnFish -= dt;
+  const ramp = Math.min(1, state.t / 75);
+  if (state.spawnStar <= 0) { spawn('star'); state.spawnStar = 0.62 - ramp * 0.2 + Math.random() * 0.3; }
+  if (state.spawnFire <= 0) { spawn('fire'); state.spawnFire = 1.15 - ramp * 0.45 + Math.random() * 0.5; }
+  if (state.spawnFish <= 0) { spawn('fish'); state.spawnFish = 6.5 + Math.random() * 5; }
+
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    it.y += it.vy * dt; it.rot += it.vr * dt;
+    if (it.kind === 'fire' && Math.random() < 0.5) {
+      particles.push({ x: it.x + (Math.random() - 0.5) * 30, y: it.y - 34, vx: (Math.random() - 0.5) * 40,
+        vy: -120 - Math.random() * 90, life: 0.42, max: 0.42, color: '#ff9a3d', r: 5 + Math.random() * 6 });
+    }
+    const dx = it.x - cat.x, dy = it.y - (cat.y - 30);
+    if (Math.abs(dx) < 108 && Math.abs(dy) < 118) {
+      if (it.kind === 'fire') {
+        state.lives--; state.hits++; state.shake = 16; state.flash = 0.55;
+        burst(it.x, it.y, '#ff7b1c', 22);
+        floaters.push({ x: it.x, y: it.y - 70, text: 'OUCH!', color: '#ff8f6b', life: 0.9 });
+        if (state.lives <= 0) { state.over = true; state.running = false; }
+      } else {
+        const pts = it.kind === 'fish' ? 25 : 10;
+        state.score += pts; state.caught++;
+        burst(it.x, it.y, it.kind === 'fish' ? '#37e0c8' : '#ffd94d', 16);
+        floaters.push({ x: it.x, y: it.y - 70, text: '+' + pts, color: '#ffe98a', life: 0.9 });
+      }
+      items.splice(i, 1); continue;
+    }
+    if (it.y > H + 90) items.splice(i, 1);
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 260 * dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    const f = floaters[i]; f.y -= 88 * dt; f.life -= dt;
+    if (f.life <= 0) floaters.splice(i, 1);
+  }
+  state.shake = Math.max(0, state.shake - dt * 26);
+  state.flash = Math.max(0, state.flash - dt * 1.6);
+}
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 90 + Math.random() * 330;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60,
+      life: 0.55 + Math.random() * 0.3, max: 0.85, color, r: 4 + Math.random() * 7 });
+  }
+}
+
+// ---------------------------------------------------------------- frame
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!state.running) { drawBackground(); drawCat(); drawHUD(); return; }
+  const dt = Math.min(0.05, (now - state.last) / 1000 || 0.016);
+  state.last = now;
+  update(dt);
+  ctx.save();
+  if (state.shake > 0) ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
+  drawBackground();
+  for (const it of items) drawItem(it);
+  drawCat();
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.font = '800 52px system-ui, sans-serif';
+  for (const f of floaters) {
+    ctx.globalAlpha = Math.min(1, f.life * 1.6);
+    ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  if (state.flash > 0) {
+    ctx.fillStyle = 'rgba(255,64,32,' + (state.flash * 0.5).toFixed(3) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+  drawHUD();
+}
+if (DEMO) { state.running = true; state.last = performance.now(); }
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

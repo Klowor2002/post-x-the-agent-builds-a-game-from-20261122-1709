@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>code scene</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 1080px; height: 1920px; background: #0d1117; overflow: hidden;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  #bar { height: 104px; background: #161b22; border-bottom: 2px solid #30363d; display: flex; align-items: center; padding: 0 36px; }
+  .dot { width: 26px; height: 26px; border-radius: 50%; margin-right: 16px; }
+  #tab { margin-left: 30px; background: #0d1117; border: 2px solid #30363d; border-bottom: none; color: #e6edf3;
+    font-size: 30px; padding: 16px 30px; border-radius: 12px 12px 0 0; }
+  #status { margin-left: auto; color: #7ee2a8; font-size: 28px; font-weight: 700; }
+  #code { padding: 30px 34px; font-size: 25.5px; line-height: 1.52; color: #e6edf3; white-space: pre-wrap; word-break: break-all; }
+  .kw { color: #ff7b72; } .str { color: #a5d6ff; } .com { color: #8b949e; font-style: italic; }
+  .num { color: #79c0ff; } .fn { color: #d2a8ff; }
+  #caret { display: inline-block; width: 14px; height: 30px; background: #58a6ff; vertical-align: -4px;
+    animation: blink 0.7s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #caption { position: fixed; left: 0; right: 0; bottom: 64px; text-align: center;
+    font-family: system-ui, sans-serif; font-size: 44px; font-weight: 700; color: #ffffff;
+    text-shadow: 0 3px 18px rgba(0,0,0,0.9); }
+</style>
+</head>
+<body>
+<div id="bar">
+  <div class="dot" style="background:#ff5f57"></div>
+  <div class="dot" style="background:#febc2e"></div>
+  <div class="dot" style="background:#28c840"></div>
+  <div id="tab">index.html — Star Cat</div>
+  <div id="status">agent is writing…</div>
+</div>
+<pre id="code"></pre>
+<div id="caption">…every line written by the agent, live</div>
+<script>
+  var DURATION = 15000; // ms to reveal the whole file
+  var src = '', t0 = null;
+  var codeEl = document.getElementById('code');
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+  function highlight(s) {
+    s = esc(s);
+    s = s.replace(/(\/\/[^\n]*)/g, '\u0001$1\u0002');
+    s = s.replace(/(&#39;|')([^'\n]*)'/g, '\u0003$&' + '\u0004');
+    s = s.replace(/\b(const|let|var|function|return|if|else|for|while|new|typeof|class|of|in|true|false|null)\b/g, '\u0005$1\u0006');
+    s = s.replace(/\b(\d+(?:\.\d+)?)\b/g, '\u0007$1\u0008');
+    s = s.replace(/\u0001/g, '<span class="com">').replace(/\u0002/g, '</span>');
+    s = s.replace(/\u0003/g, '<span class="str">').replace(/\u0004/g, '</span>');
+    s = s.replace(/\u0005/g, '<span class="kw">').replace(/\u0006/g, '</span>');
+    s = s.replace(/\u0007/g, '<span class="num">').replace(/\u0008/g, '</span>');
+    return s;
+  }
+  fetch('../game/index.html').then(function (r) { return r.text(); }).then(function (text) {
+    src = text;
+    t0 = performance.now();
+    requestAnimationFrame(tick);
+  });
+  function tick() {
+    var t = performance.now() - t0;
+    var frac = Math.min(1, t / DURATION);
+    // ease: fast start, steady middle — reveal by character count
+    var n = Math.floor(src.length * frac);
+    codeEl.innerHTML = highlight(src.slice(0, n)) + '<span id="caret"></span>';
+    window.scrollTo(0, document.body.scrollHeight);
+    if (frac >= 1) document.getElementById('status').textContent = 'done ✓';
+    if (t < DURATION + 400) requestAnimationFrame(tick);
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt scene</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 1080px; height: 1920px; background: #0a0a12; overflow: hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #f2f2f7; }
+  #wrap { padding: 190px 84px 0 84px; }
+  #kicker { font-size: 34px; letter-spacing: 6px; font-weight: 700; color: #8f8fa8; opacity: 0; transition: opacity .6s; }
+  #hook { font-size: 96px; line-height: 1.12; font-weight: 800; margin-top: 44px; opacity: 0; transition: opacity .6s; }
+  #hook .one { color: #ffd94d; }
+  #bubbleRow { margin-top: 120px; opacity: 0; transition: opacity .4s; }
+  #who { font-size: 30px; color: #8f8fa8; margin-bottom: 18px; font-weight: 600; }
+  #bubble { background: #1d1d2b; border: 2px solid #34344a; border-radius: 36px; padding: 44px 48px;
+    font-size: 47px; line-height: 1.45; min-height: 300px; }
+  #caret { display: inline-block; width: 5px; height: 52px; background: #ffd94d; vertical-align: -8px;
+    animation: blink 0.8s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #after { margin-top: 110px; font-size: 52px; font-weight: 700; line-height: 1.35; opacity: 0; transition: opacity .6s; }
+  #after .g { color: #7ee2a8; }
+  .show { opacity: 1 !important; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="kicker">MY AI AGENT + ONE PROMPT</div>
+  <div id="hook">I gave my agent<br><span class="one">ONE prompt.</span></div>
+  <div id="bubbleRow">
+    <div id="who">me → my AI agent</div>
+    <div id="bubble"><span id="typed"></span><span id="caret"></span></div>
+  </div>
+  <div id="after">Then it wrote the <span class="g">whole game</span> itself.<br>Watch.</div>
+</div>
+<script>
+  var PROMPT = 'Build a tiny browser game where a wizard cat dodges falling fireballs and catches falling stars for points, in one self-contained HTML file.';
+  var t0 = performance.now();
+  var typed = document.getElementById('typed');
+  function tick() {
+    var t = (performance.now() - t0) / 1000;
+    if (t > 0.3) document.getElementById('kicker').classList.add('show');
+    if (t > 0.7) document.getElementById('hook').classList.add('show');
+    if (t > 1.7) document.getElementById('bubbleRow').classList.add('show');
+    if (t > 2.0) {
+      var n = Math.min(PROMPT.length, Math.floor((t - 2.0) * 42));
+      typed.textContent = PROMPT.slice(0, n);
+    }
+    if (t > 5.6) document.getElementById('after').classList.add('show');
+    if (t < 8) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>
